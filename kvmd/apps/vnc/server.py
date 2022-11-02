@@ -122,6 +122,8 @@ class _Client(RfbClient):  # pylint: disable=too-many-instance-attributes
 
         self.__fb_notifier = aiotools.AioNotifier()
         self.__fb_queue: "asyncio.Queue[dict]" = asyncio.Queue()
+        self.__fb_cont_updates = False
+        self.__fb_key_required = True
 
         # Эти состояния шарить не обязательно - бекенд исключает дублирующиеся события.
         # Все это нужно только чтобы не посылать лишние жсоны в сокет KVMD
@@ -198,7 +200,10 @@ class _Client(RfbClient):  # pylint: disable=too-many-instance-attributes
         while True:
             try:
                 streaming = False
+                self.__fb_key_required = True
+                streamer.set_key_required(self.__fb_key_required)
                 async for frame in streamer.read_stream():
+                    streamer.set_key_required(self.__fb_key_required)
                     if not streaming:
                         logger.info("%s [streamer]: Streaming ...", self._remote)
                         streaming = True
@@ -249,7 +254,8 @@ class _Client(RfbClient):  # pylint: disable=too-many-instance-attributes
         has_h264_key = False
         last: (dict | None) = None
         while True:
-            await self.__fb_notifier.wait()
+            if not self.__fb_cont_updates:
+                await self.__fb_notifier.wait()
 
             while True:
                 frame = await self.__fb_queue.get()
@@ -298,8 +304,10 @@ class _Client(RfbClient):  # pylint: disable=too-many-instance-attributes
                     if not self._encodings.has_h264:
                         raise RfbError("The client doesn't want to accept H264 anymore")
                     if has_h264_key:
+                        self.__fb_key_required = False
                         await self._send_fb_h264(last["data"])
                     else:
+                        self.__fb_key_required = True
                         self.__fb_notifier.notify()
                 else:
                     raise RuntimeError(f"Unknown format: {last['format']}")
@@ -414,6 +422,12 @@ class _Client(RfbClient):  # pylint: disable=too-many-instance-attributes
 
     async def _on_fb_update_request(self) -> None:
         self.__fb_notifier.notify()
+
+    async def _on_enable_cont_updates(self, enabled: bool) -> None:
+        get_logger(0).info("%s [main]: Applying ContUpdates=%s ...", self._remote, enabled)
+        self.__fb_cont_updates = enabled
+        if enabled:
+            self.__fb_notifier.notify()
 
 
 # =====

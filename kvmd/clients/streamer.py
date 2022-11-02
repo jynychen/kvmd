@@ -60,6 +60,9 @@ class BaseStreamerClient:
     def get_format(self) -> int:
         raise NotImplementedError()
 
+    def set_key_required(self, key_required: bool) -> None:
+        _ = key_required
+
     async def read_stream(self) -> AsyncGenerator[dict, None]:
         if self is not None:  # XXX: Vulture and pylint hack
             raise NotImplementedError()
@@ -167,22 +170,26 @@ class MemsinkStreamerClient(BaseStreamerClient):
             "wait_timeout": wait_timeout,
             "drop_same_frames": drop_same_frames,
         }
+        self.__key_required = False
 
     def get_format(self) -> int:
         return self.__fmt
+
+    def set_key_required(self, key_required: bool) -> None:
+        if self.__fmt == StreamFormats.H264:
+            self.__key_required = key_required
 
     async def read_stream(self) -> AsyncGenerator[dict, None]:
         if ustreamer is None:
             raise StreamerPermError("Missing ustreamer library")
         try:
             with ustreamer.Memsink(**self.__kwargs) as sink:
-                key_required = (self.__fmt == StreamFormats.H264)
                 while True:
-                    frame = await aiotools.run_async(sink.wait_frame, key_required)
+                    frame = await aiotools.run_async(sink.wait_frame, self.__key_required)
                     if frame is not None:
                         self.__check_format(frame["format"])
                         if frame["key"]:
-                            key_required = False
+                            self.__key_required = False
                         yield frame
         except StreamerPermError:
             raise
